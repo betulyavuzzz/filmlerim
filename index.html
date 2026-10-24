@@ -224,7 +224,9 @@ var LS='filmlerim-v2', LK='filmlerim-keys';
 
 var films=new Map(), keys={tmdb:'',omdb:''}, tab='watch', view='grid', q='', filters=new Set(), maxDur=0;
 var pickId=null, sheetId=null, sheetMode='film', sortMode=false, delAsk=null, revealed=new Set(), statYear='all';
-var results=null, suggs=null, searchText='', sg={min:'7.5',year:'2015',genre:'',lang:'',twist:true,similar:true};
+var results=null, suggs=null, searchText='', sg={min:'7.5',year:'1990',genre:'',lang:'',twist:true,similar:true};
+var CURATED=[["Sinners", 2025], ["Anatomy of a Fall", 2023], ["Glass Onion", 2022], ["Barbarian", 2022], ["Knives Out", 2019], ["Parasite", 2019], ["Badla", 2019], ["Searching", 2018], ["Burning", 2018], ["Hereditary", 2018], ["Vikram Vedha", 2017], ["Get Out", 2017], ["Split", 2016], ["The Invisible Guest", 2016], ["Arrival", 2016], ["The Wailing", 2016], ["Nocturnal Animals", 2016], ["Ex Machina", 2014], ["Predestination", 2014], ["Kahaani", 2012], ["The Girl with the Dragon Tattoo", 2011], ["Black Swan", 2010], ["Shutter Island", 2010], ["Inception", 2010], ["I Saw the Devil", 2010], ["The Secret in Their Eyes", 2009], ["Mother", 2009], ["Moon", 2009], ["Gone Baby Gone", 2007], ["The Departed", 2006], ["The Prestige", 2006], ["Tell No One", 2006], ["The Machinist", 2004], ["Saw", 2004], ["Memories of Murder", 2003], ["Mystic River", 2003], ["The Others", 2001], ["Memento", 2000], ["Fight Club", 1999], ["The Sixth Sense", 1999], ["The Game", 1997], ["Primal Fear", 1996], ["The Usual Suspects", 1995], ["Se7en", 1995], ["Drishyam", 2015]];
+var sugOff=0;
 var genreList=null, twistKw=null, busy=false, toastTimer=null, drag=null;
 
 function $(s){return document.querySelector(s);}
@@ -476,19 +478,20 @@ function renderGrid(){
 }
 function findHTML(){
   var h=keyBanner();
-  var off=hasSrc()?'':' disabled',offS=keys.tmdb?'':' disabled';
+  var off=hasSrc()?'':' disabled',offS=hasSrc()?'':' disabled';
   h+='<section class="box"><h2>Film ara</h2><div class="row"><div class="grow"><label class="lab" for="sin">Film adı (Türkçe ya da orijinal)</label><input class="in" id="sin" placeholder="Örnek: Kayıp Kız" value="'+esc(searchText)+'" autocomplete="off"></div>'
     +'<button class="btn solid" data-act="search"'+off+'>Ara</button></div><div class="cands" id="sres">'+candsHTML(results)+'</div></section>';
   var gs='<option value="">Fark etmez</option>'+(genreList||[]).map(function(g){return '<option value="'+g.id+'"'+(String(sg.genre)===String(g.id)?' selected':'')+'>'+esc(g.name)+'</option>';}).join('');
   var ls=LANGS.map(function(l){return '<option value="'+l[0]+'"'+(sg.lang===l[0]?' selected':'')+'>'+l[1]+'</option>';}).join('');
+  var omo=!keys.tmdb;
   h+='<section class="box"><h2>Öneri al</h2><div class="two">'
-    +'<div><label class="lab" for="sg_min">En az puan (TMDB)</label><input class="in" type="number" step="0.1" min="0" max="10" id="sg_min" data-g="min" value="'+esc(sg.min)+'"></div>'
+    +'<div><label class="lab" for="sg_min">En az puan ('+(omo?'IMDb':'TMDB')+')</label><input class="in" type="number" step="0.1" min="0" max="10" id="sg_min" data-g="min" value="'+esc(sg.min)+'"></div>'
     +'<div><label class="lab" for="sg_yr">En eski yıl</label><input class="in" type="number" min="1900" max="2100" id="sg_yr" data-g="year" value="'+esc(sg.year)+'"></div>'
-    +'<div><label class="lab" for="sg_gn">Tür</label><select class="in" id="sg_gn" data-g="genre">'+gs+'</select></div>'
-    +'<div><label class="lab" for="sg_ln">Dil</label><select class="in" id="sg_ln" data-g="lang">'+ls+'</select></div></div>'
-    +'<div class="row" style="margin:12px 0"><label><input type="checkbox" id="sg_tw" data-g="twist"'+(sg.twist?' checked':'')+'> Sonu twist olsun</label>'
-    +'<label><input type="checkbox" id="sg_ta" data-g="similar"'+(sg.similar?' checked':'')+'> İzlediklerime benzesin</label></div>'
-    +'<button class="btn solid" data-act="suggest"'+offS+'>Film öner</button>'+(keys.tmdb?'':'<p class="meta" style="margin-top:8px">Öneri almak için TMDB anahtarı gerekir. Şimdilik film adıyla arayıp ekleyebilirsin.</p>')+'<div class="cands" id="sugs">'+candsHTML(suggs)+'</div></section>';
+    +(omo?'':'<div><label class="lab" for="sg_gn">Tür</label><select class="in" id="sg_gn" data-g="genre">'+gs+'</select></div>'
+    +'<div><label class="lab" for="sg_ln">Dil</label><select class="in" id="sg_ln" data-g="lang">'+ls+'</select></div>')+'</div>'
+    +(omo?'<div style="margin:12px 0"></div>':'<div class="row" style="margin:12px 0"><label><input type="checkbox" id="sg_tw" data-g="twist"'+(sg.twist?' checked':'')+'> Sonu twist olsun</label>'
+    +'<label><input type="checkbox" id="sg_ta" data-g="similar"'+(sg.similar?' checked':'')+'> İzlediklerime benzesin</label></div>')
+    +'<button class="btn solid" data-act="suggest"'+offS+'>Film öner</button>'+(keys.tmdb?'':'<p class="meta" style="margin-top:8px">Öneriler, sonu şaşırtan filmlerden seçilmiş hazır listeden gelir. Her basışta yeni filmler çıkar.</p>')+'<div class="cands" id="sugs">'+candsHTML(suggs)+'</div></section>';
   h+='<details class="box det"><summary>Elle ekle</summary><div class="two"><div><label class="lab" for="m_t">Film adı</label><input class="in" id="m_t"></div>'
     +'<div><label class="lab" for="m_y">Yıl</label><input class="in" type="number" id="m_y"></div>'
     +'<div><label class="lab" for="m_s">Liste</label><select class="in" id="m_s"><option value="watch">İzleyeceğim</option><option value="watched">İzledim</option></select></div></div>'
@@ -503,7 +506,7 @@ function candsHTML(arr){
     var act=exists(c)?'<span class="tag">Listende</span>':'<button class="btn sm solid" data-act="addw" data-i="'+i+'">İzleyeceğim</button><button class="btn sm" data-act="addd" data-i="'+i+'">İzledim</button>';
     return '<article class="cand"><div class="poster">'+posterInner(c,'w185')+'</div><div class="info"><h3 class="ttl">'+esc(c.title)+'</h3>'
       +(c.trTitle&&norm(c.trTitle)!==norm(c.title)?'<p class="tr">'+esc(c.trTitle)+'</p>':'')
-      +'<p class="meta">'+esc([c.year,c.vote?'TMDB '+c.vote.toFixed(1):''].filter(Boolean).join(' · '))+'</p>'
+      +'<p class="meta">'+esc([c.year,c.vote?(c.src||'TMDB')+' '+c.vote.toFixed(1):''].filter(Boolean).join(' · '))+'</p>'
       +(c.overview?'<p class="tr">'+esc(c.overview.length>150?c.overview.slice(0,150)+'…':c.overview)+'</p>':'')
       +'<div class="acts">'+act+'</div></div></article>';
   }).join('');
@@ -635,7 +638,28 @@ async function twistKeyword(){
   try{var r=await tmdb('/search/keyword',{query:'twist ending'});var l=r.results||[];var m=l.filter(function(k){return String(k.name).toLowerCase()==='twist ending';})[0]||l[0];twistKw=m?m.id:0;}catch(e){twistKw=0;}
   return twistKw;
 }
+async function doSuggestOmdb(){
+  if(busy)return;busy=true;setMsg('Öneriler hazırlanıyor…');
+  try{
+    var min=parseFloat(sg.min)||0,yr=parseInt(sg.year,10)||1900;
+    var pool=CURATED.filter(function(c){return c[1]>=yr&&!exists({title:c[0],year:c[1]});});
+    if(sugOff>=pool.length)sugOff=0;
+    var out=[],tries=0;
+    while(out.length<6&&sugOff<pool.length&&tries<4){
+      var batch=pool.slice(sugOff,sugOff+6);sugOff+=6;tries++;
+      var got=await Promise.all(batch.map(function(c){return omdbGet({t:c[0],y:c[1],type:'movie',plot:'short'}).catch(function(){return null;});}));
+      got.forEach(function(o){
+        if(!o||o.Response!=='True')return;var f=omdbBuild(o);
+        if(f.imdb==null||f.imdb<min)return;
+        out.push({imdbId:f.imdbId,title:f.title,trTitle:'',year:f.year,posterUrl:f.posterUrl,vote:f.imdb,src:'IMDb',twist:true,overview:f.overview});
+      });
+    }
+    suggs=out;setMsg(out.length?'':'Bu ölçütlere uyan yeni film kalmadı. Puanı ya da yılı düşür.');
+  }catch(e){setMsg(e.message);}
+  busy=false;var el=$('#sugs');if(el)el.innerHTML=candsHTML(suggs);
+}
 async function doSuggest(){
+  if(!keys.tmdb)return doSuggestOmdb();
   if(busy)return;busy=true;setMsg('Öneriler hazırlanıyor…');
   try{
     var min=parseFloat(sg.min)||0,yr=parseInt(sg.year,10)||1900;
@@ -670,7 +694,7 @@ async function doSuggest(){
 }
 async function addCand(c,status){
   if(busy)return;busy=true;setMsg('Film bilgileri alınıyor…');
-  try{var nf=c.tmdbId?await fullFilm(c.tmdbId):await omdbFull(c.imdbId);addFilm(toFilm(nf,status));setMsg('');toast(nf.title+' eklendi');}
+  try{var nf=c.tmdbId?await fullFilm(c.tmdbId):await omdbFull(c.imdbId);if(c.twist!=null&&!c.tmdbId)nf.twist=c.twist;addFilm(toFilm(nf,status));setMsg('');toast(nf.title+' eklendi');}
   catch(e){setMsg(e.message);}
   busy=false;render();
 }
