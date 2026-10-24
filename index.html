@@ -347,23 +347,54 @@ function merge(id,nf){
     imdb:nf.imdb!=null?nf.imdb:f.imdb,approx:nf.imdb!=null?false:f.approx,tmdbVote:nf.tmdbVote!=null?nf.tmdbVote:f.tmdbVote,providers:nf.providers||f.providers,
     twist:f.twist==null?nf.twist:f.twist,trChecked:true});
 }
+var ALT={'Monster':['Kaibutsu','怪物'],'Maharaja':['Maharaja Nithilan','மகாராஜா'],'Drishyam 2':['Drishyam 2 Jeethu Joseph','ദൃശ്യം 2'],'Ratsasan':['ராட்சசன்']};
+function dirOk(f,d){
+  var last=norm((f.director||'').split(' ').pop());if(!last)return true;
+  var dirs=norm(((d.credits&&d.credits.crew)||[]).filter(function(c){return c.job==='Director';}).map(function(c){return c.name;}).join(' '));
+  return dirs.indexOf(last)>=0;
+}
 async function matchOne(id){
   if(!keys.tmdb)return matchOneOmdb(id);
-  var f=films.get(id);
-  var s=await tmdb('/search/movie',{query:f.title,language:'tr-TR',year:f.year||'',include_adult:'false'});
-  var list=(s.results||[]).slice(0,4);
-  if(!list.length&&f.year){s=await tmdb('/search/movie',{query:f.title,language:'tr-TR',include_adult:'false'});list=(s.results||[]).slice(0,4);}
-  if(!list.length)return false;
-  var chosen=null,first=null,last=norm((f.director||'').split(' ').pop());
-  for(var i=0;i<Math.min(3,list.length);i++){
-    var d=await detail(list[i].id);if(!first)first=d;
-    var dirs=norm(((d.credits&&d.credits.crew)||[]).filter(function(c){return c.job==='Director';}).map(function(c){return c.name;}).join(' '));
-    if(!f.director||!last||dirs.indexOf(last)>=0){chosen=d;break;}
+  var f=films.get(id),chosen=null;
+  if(keys.omdb){
+    try{
+      var o=await omdbGet(f.year?{t:f.title,y:f.year,type:'movie'}:{t:f.title,type:'movie'});
+      if(o.Response==='True'&&o.imdbID){
+        var last=norm((f.director||'').split(' ').pop());
+        if(!last||norm(o.Director||'').indexOf(last)>=0){
+          var fr=await tmdb('/find/'+o.imdbID,{external_source:'imdb_id',language:'tr-TR'});
+          var m=(fr.movie_results||[])[0];if(m)chosen=await detail(m.id);
+        }
+      }
+    }catch(e){if(/anahtar/.test(e.message))throw e;}
   }
-  chosen=chosen||first;
+  if(!chosen){
+    var seen={},qs=[f.title].concat(ALT[f.title]||[]);
+    for(var qi=0;qi<qs.length&&!chosen;qi++){
+      var lists=[];
+      if(f.year)lists.push(await tmdb('/search/movie',{query:qs[qi],language:'tr-TR',year:f.year,include_adult:'false'}));
+      lists.push(await tmdb('/search/movie',{query:qs[qi],language:'tr-TR',include_adult:'false'}));
+      for(var li=0;li<lists.length&&!chosen;li++){
+        var rs=(lists[li].results||[]).slice(0,8);
+        for(var ri=0;ri<rs.length;ri++){
+          if(seen[rs[ri].id])continue;seen[rs[ri].id]=1;
+          if(f.year&&rs[ri].release_date&&Math.abs(+rs[ri].release_date.slice(0,4)-f.year)>1)continue;
+          var d=await detail(rs[ri].id);
+          if(dirOk(f,d)){chosen=d;break;}
+        }
+      }
+    }
+  }
+  if(!chosen)return false;
   var imdb=await omdbRating(chosen.imdb_id||(chosen.external_ids&&chosen.external_ids.imdb_id));
   merge(id,build(chosen,imdb));
   return true;
+}
+function resetSeeds(){
+  SEED.forEach(function(sd){
+    if(!films.has(sd.id))return;
+    patch(sd.id,{tmdbId:null,imdbId:'',posterPath:'',posterUrl:'',providers:[],tmdbVote:null,approx:true,trTitle:sd.trTitle||'',year:sd.year,runtime:sd.runtime,genres:sd.genres,director:sd.director,overview:sd.overview,imdb:sd.imdb});
+  });
 }
 async function matchAll(){
   if(busy)return;var ids=unmatched();if(!ids.length)return;
@@ -608,7 +639,7 @@ function settingsHTML(){
     +'<div><label class="lab" for="k_t">TMDB API Key</label><input class="in" id="k_t" autocomplete="off" autocapitalize="off" spellcheck="false" value="'+esc(keys.tmdb)+'"></div></div>'
     +'<div class="sec"><h3>OMDb</h3><p style="margin:0">Afiş, IMDb puanı, yıl, süre, tür ve yönetmen için. Tek başına yeterli. <a href="https://www.omdbapi.com/apikey.aspx" target="_blank" rel="noopener">omdbapi.com/apikey.aspx</a> sayfasında FREE seçeneğiyle e-postana anahtar gelir, içindeki bağlantıyla etkinleştir. </p>'
     +'<div><label class="lab" for="k_o">OMDb API Key</label><input class="in" id="k_o" autocomplete="off" autocapitalize="off" spellcheck="false" value="'+esc(keys.omdb)+'"></div></div>'
-    +'<div class="row"><button class="btn solid" data-act="savekeys">Kaydet ve dene</button></div><p class="msg" id="kmsg"></p></div>';
+    +'<div class="row"><button class="btn solid" data-act="savekeys">Kaydet ve dene</button><button class="btn" data-act="resetmatch">Hazır filmleri yeniden eşleştir</button></div><p class="msg" id="kmsg"></p></div>';
 }
 function renderSheet(first){
   var s=$('#sheet');if(!sheetId&&sheetMode!=='settings')return;
@@ -777,6 +808,7 @@ document.addEventListener('click',function(e){
       if(busy)break;busy=true;toast('Eşleştiriliyor…');
       (async function(){var f=films.get(id);patch(id,{tmdbId:null});try{var okk=await matchOne(id);toast(okk?'Eşleşti':'Bulunamadı');}catch(er){patch(id,{tmdbId:f.tmdbId||null});toast(er.message);}busy=false;renderSheet();})();break;
     case 'matchall':matchAll();break;
+    case 'resetmatch':resetSeeds();sheetMode='film';closeSheet();matchAll();break;
     case 'search':if(!busy)doSearch();break;
     case 'suggest':doSuggest();break;
     case 'addw':case 'addd':
@@ -841,6 +873,7 @@ document.addEventListener('pointercancel',endDrag);
 
 load();
 render();
+try{if(keys.tmdb&&!localStorage.getItem('filmlerim-fix1')){localStorage.setItem('filmlerim-fix1','1');resetSeeds();render();matchAll();}}catch(e){}
 if(keys.tmdb)loadGenres();
 window.__filmlerim={films:function(){return films;},state:function(){return {tab:tab,keys:keys};},matchAll:matchAll,applyOrderFromDOM:applyOrderFromDOM};
 })();
