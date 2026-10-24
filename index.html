@@ -266,7 +266,8 @@ function visible(status){
     return true;
   });
 }
-function unmatched(){var n=[];films.forEach(function(f,id){if(!f.tmdbId)n.push(id);});return n;}
+function unmatched(){var n=[];films.forEach(function(f,id){if(keys.tmdb?!f.tmdbId:(!f.tmdbId&&!f.imdbId))n.push(id);});return n;}
+function hasSrc(){return !!(keys.tmdb||keys.omdb);}
 
 /* ---------- TMDB ve OMDb ---------- */
 async function tmdb(path,params){
@@ -287,6 +288,34 @@ async function omdbRating(imdbId){
     if(o&&o.Response==='True'&&o.imdbRating&&o.imdbRating!=='N/A')return +o.imdbRating;
   }catch(e){}
   return null;
+}
+var GENRE_TR={'Action':'Aksiyon','Adventure':'Macera','Animation':'Animasyon','Biography':'Biyografi','Comedy':'Komedi','Crime':'Suç','Documentary':'Belgesel','Drama':'Dram','Family':'Aile','Fantasy':'Fantastik','History':'Tarih','Horror':'Korku','Music':'Müzik','Musical':'Müzikal','Mystery':'Gizem','Romance':'Romantik','Sci-Fi':'Bilim kurgu','Sport':'Spor','Thriller':'Gerilim','War':'Savaş','Western':'Western','Film-Noir':'Kara film'};
+async function omdbGet(params){
+  if(!keys.omdb)throw new Error('OMDb anahtarı yok');
+  var u=new URL('https://www.omdbapi.com/');Object.keys(params).forEach(function(k){u.searchParams.set(k,params[k]);});u.searchParams.set('apikey',keys.omdb);
+  var r=await fetch(u.toString());
+  if(r.status===401)throw new Error('OMDb anahtarı geçersiz ya da etkinleştirilmemiş');
+  if(!r.ok)throw new Error('OMDb yanıt vermedi ('+r.status+')');
+  return r.json();
+}
+function omdbBuild(o){
+  var rt=parseInt(String(o.Runtime||''),10),rate=parseFloat(o.imdbRating);
+  return {imdbId:o.imdbID,title:o.Title,trTitle:'',year:parseInt(o.Year,10)||null,runtime:isNaN(rt)?null:rt,
+    genres:String(o.Genre||'').split(',').map(function(g){g=g.trim();return GENRE_TR[g]||g;}).filter(Boolean).slice(0,4),
+    director:o.Director&&o.Director!=='N/A'?o.Director.split(',')[0].trim():'',overview:o.Plot&&o.Plot!=='N/A'?o.Plot:'',
+    posterUrl:o.Poster&&o.Poster!=='N/A'?o.Poster:'',imdb:isNaN(rate)?null:rate,twist:false};
+}
+async function omdbSearchList(text){
+  var o=await omdbGet({s:text,type:'movie'});
+  if(o.Response!=='True')return [];
+  return (o.Search||[]).slice(0,8).map(function(x){return {imdbId:x.imdbID,title:x.Title,trTitle:'',year:parseInt(x.Year,10)||null,posterUrl:x.Poster&&x.Poster!=='N/A'?x.Poster:'',vote:0,overview:''};});
+}
+async function omdbFull(imdbId){var o=await omdbGet({i:imdbId,plot:'short'});if(o.Response!=='True')throw new Error('Film bulunamadı');return omdbBuild(o);}
+async function matchOneOmdb(id){
+  var f=films.get(id),o=await omdbGet(f.year?{t:f.title,y:f.year,type:'movie'}:{t:f.title,type:'movie'});
+  if(o.Response!=='True'&&f.year)o=await omdbGet({t:f.title,type:'movie'});
+  if(o.Response!=='True')return false;
+  merge(id,omdbBuild(o));return true;
 }
 function latin(s){return /^[\p{Script=Latin}\d\s\p{P}\p{S}]+$/u.test(String(s||''));}
 function build(d,imdb){
@@ -311,12 +340,13 @@ function toFilm(nf,status){
 }
 function merge(id,nf){
   var f=films.get(id);
-  patch(id,{tmdbId:nf.tmdbId,imdbId:nf.imdbId,trTitle:f.trTitle||nf.trTitle,year:f.year||nf.year,runtime:nf.runtime||f.runtime,
-    genres:nf.genres.length?nf.genres:f.genres,director:nf.director||f.director,overview:nf.overview||f.overview,posterPath:nf.posterPath||f.posterPath,
-    imdb:nf.imdb!=null?nf.imdb:f.imdb,approx:nf.imdb!=null?false:f.approx,tmdbVote:nf.tmdbVote,providers:nf.providers,
+  patch(id,{tmdbId:nf.tmdbId||f.tmdbId||null,imdbId:nf.imdbId||f.imdbId,posterUrl:nf.posterUrl||f.posterUrl||'',trTitle:f.trTitle||nf.trTitle,year:f.year||nf.year,runtime:nf.runtime||f.runtime,
+    genres:(nf.genres&&nf.genres.length)?nf.genres:f.genres,director:nf.director||f.director,overview:nf.overview||f.overview,posterPath:nf.posterPath||f.posterPath,
+    imdb:nf.imdb!=null?nf.imdb:f.imdb,approx:nf.imdb!=null?false:f.approx,tmdbVote:nf.tmdbVote!=null?nf.tmdbVote:f.tmdbVote,providers:nf.providers||f.providers,
     twist:f.twist==null?nf.twist:f.twist,trChecked:true});
 }
 async function matchOne(id){
+  if(!keys.tmdb)return matchOneOmdb(id);
   var f=films.get(id);
   var s=await tmdb('/search/movie',{query:f.title,language:'tr-TR',year:f.year||'',include_adult:'false'});
   var list=(s.results||[]).slice(0,4);
@@ -353,6 +383,7 @@ function fake(f){
 }
 function posterInner(f,size){
   if(f.poster)return '<img class="custom" alt="" src="'+esc(f.poster)+'">';
+  if(f.posterUrl&&!f.posterPath)return '<img alt="" loading="lazy" referrerpolicy="no-referrer" data-t="'+esc(f.title)+'" data-y="'+esc(f.year||'')+'" src="'+esc(f.posterUrl)+'">';
   if(f.posterPath)return '<img alt="" loading="lazy" data-t="'+esc(f.title)+'" data-y="'+esc(f.year||'')+'" src="https://image.tmdb.org/t/p/'+size+esc(f.posterPath)+'">';
   return fake(f);
 }
@@ -408,9 +439,9 @@ function chipsHTML(status){
   return h;
 }
 function keyBanner(){
-  if(!keys.tmdb)return '<div class="notice"><span>Gerçek afişler ve film bilgileri için ayarlara TMDB anahtarını ekle.</span><button class="btn sm solid" data-act="settings">Ayarlar</button></div>';
+  if(!hasSrc())return '<div class="notice"><span>Gerçek afişler ve film bilgileri için ayarlara OMDb (ya da TMDB) anahtarını ekle.</span><button class="btn sm solid" data-act="settings">Ayarlar</button></div>';
   var n=unmatched().length;
-  if(n)return '<div class="notice"><span>'+n+' film henüz TMDB ile eşleşmedi. Afişleri ve gerçek puanları getirelim.</span><button class="btn sm solid" data-act="matchall">Eşleştir</button></div>';
+  if(n)return '<div class="notice"><span>'+n+' film henüz gerçek verilerle eşleşmedi. Afişleri ve gerçek puanları getirelim.</span><button class="btn sm solid" data-act="matchall">Eşleştir</button></div>';
   return '';
 }
 function listHTML(){
@@ -445,7 +476,7 @@ function renderGrid(){
 }
 function findHTML(){
   var h=keyBanner();
-  var off=keys.tmdb?'':' disabled';
+  var off=hasSrc()?'':' disabled',offS=keys.tmdb?'':' disabled';
   h+='<section class="box"><h2>Film ara</h2><div class="row"><div class="grow"><label class="lab" for="sin">Film adı (Türkçe ya da orijinal)</label><input class="in" id="sin" placeholder="Örnek: Kayıp Kız" value="'+esc(searchText)+'" autocomplete="off"></div>'
     +'<button class="btn solid" data-act="search"'+off+'>Ara</button></div><div class="cands" id="sres">'+candsHTML(results)+'</div></section>';
   var gs='<option value="">Fark etmez</option>'+(genreList||[]).map(function(g){return '<option value="'+g.id+'"'+(String(sg.genre)===String(g.id)?' selected':'')+'>'+esc(g.name)+'</option>';}).join('');
@@ -457,14 +488,14 @@ function findHTML(){
     +'<div><label class="lab" for="sg_ln">Dil</label><select class="in" id="sg_ln" data-g="lang">'+ls+'</select></div></div>'
     +'<div class="row" style="margin:12px 0"><label><input type="checkbox" id="sg_tw" data-g="twist"'+(sg.twist?' checked':'')+'> Sonu twist olsun</label>'
     +'<label><input type="checkbox" id="sg_ta" data-g="similar"'+(sg.similar?' checked':'')+'> İzlediklerime benzesin</label></div>'
-    +'<button class="btn solid" data-act="suggest"'+off+'>Film öner</button><div class="cands" id="sugs">'+candsHTML(suggs)+'</div></section>';
+    +'<button class="btn solid" data-act="suggest"'+offS+'>Film öner</button>'+(keys.tmdb?'':'<p class="meta" style="margin-top:8px">Öneri almak için TMDB anahtarı gerekir. Şimdilik film adıyla arayıp ekleyebilirsin.</p>')+'<div class="cands" id="sugs">'+candsHTML(suggs)+'</div></section>';
   h+='<details class="box det"><summary>Elle ekle</summary><div class="two"><div><label class="lab" for="m_t">Film adı</label><input class="in" id="m_t"></div>'
     +'<div><label class="lab" for="m_y">Yıl</label><input class="in" type="number" id="m_y"></div>'
     +'<div><label class="lab" for="m_s">Liste</label><select class="in" id="m_s"><option value="watch">İzleyeceğim</option><option value="watched">İzledim</option></select></div></div>'
     +'<p style="margin:10px 0 0"><button class="btn solid" data-act="manual">Ekle</button></p></details>';
   return h;
 }
-function exists(c){var r=false;films.forEach(function(f){if((f.tmdbId&&f.tmdbId===c.tmdbId)||(norm(f.title)===norm(c.title)&&(!c.year||!f.year||+c.year===+f.year)))r=true;});return r;}
+function exists(c){var r=false;films.forEach(function(f){if((f.tmdbId&&f.tmdbId===c.tmdbId)||(f.imdbId&&f.imdbId===c.imdbId)||(norm(f.title)===norm(c.title)&&(!c.year||!f.year||+c.year===+f.year)))r=true;});return r;}
 function candsHTML(arr){
   if(arr==null)return '';
   if(!arr.length)return '<p class="msg">Sonuç bulunamadı. Adı değiştirip tekrar dene.</p>';
@@ -564,15 +595,15 @@ function sheetHTML(f){
     +'<div><label class="lab" for="'+pid+'_dr">Yönetmen</label><input class="in" id="'+pid+'_dr" data-f="director" value="'+esc(f.director||'')+'"></div></div>'
     +'<label><input type="checkbox" data-f="twist" id="'+pid+'_tw"'+(f.twist?' checked':'')+'> Sonu twist</label>'
     +'<div><label class="lab" for="'+pid+'_po">Kendi afişim (galeriden)</label><div class="row"><input class="in grow" type="file" accept="image/*" id="'+pid+'_po" data-poster="'+id+'">'+(f.poster?'<button class="btn sm" data-act="noposter" data-id="'+id+'">Afişi kaldır</button>':'')+'</div></div>'
-    +(keys.tmdb?'<p style="margin:0"><button class="btn" data-act="rematch" data-id="'+id+'">TMDB ile yeniden eşleştir</button></p>':'')+'</details></div>';
+    +(hasSrc()?'<p style="margin:0"><button class="btn" data-act="rematch" data-id="'+id+'">Yeniden eşleştir</button></p>':'')+'</details></div>';
   return h;
 }
 function settingsHTML(){
   return '<div class="sh"><div class="sh-bar"><button class="btn sm" data-act="close">← Kapat</button><span class="lab" style="margin:0">Ayarlar</span></div>'
     +'<h2>Anahtarlar</h2><p style="margin:0 0 14px">Anahtarlar yalnızca bu telefonda saklanır, kimseyle paylaşılmaz.</p>'
-    +'<div class="sec"><h3>TMDB</h3><p style="margin:0">Afişler, Türkçe adlar, türler, yönetmen ve izleme platformları için. Ücretsiz hesap açıp <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">Ayarlar, API</a> sayfasından anahtar iste. Kısa olan "API Key" yeterli.</p>'
+    +'<div class="sec"><h3>TMDB</h3><p style="margin:0">İsteğe bağlı. Türkçe adlar, Türkiye için izleme platformları, öneriler ve otomatik twist işareti için. TMDB sitesi açılmıyorsa boş bırak. Ücretsiz hesap açıp <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">Ayarlar, API</a> sayfasından anahtar iste. Kısa olan "API Key" yeterli.</p>'
     +'<div><label class="lab" for="k_t">TMDB API Key</label><input class="in" id="k_t" autocomplete="off" autocapitalize="off" spellcheck="false" value="'+esc(keys.tmdb)+'"></div></div>'
-    +'<div class="sec"><h3>OMDb</h3><p style="margin:0">Gerçek IMDb puanı için. <a href="https://www.omdbapi.com/apikey.aspx" target="_blank" rel="noopener">omdbapi.com/apikey.aspx</a> sayfasında FREE seçeneğiyle e-postana anahtar gelir, içindeki bağlantıyla etkinleştir. Zorunlu değil.</p>'
+    +'<div class="sec"><h3>OMDb</h3><p style="margin:0">Afiş, IMDb puanı, yıl, süre, tür ve yönetmen için. Tek başına yeterli. <a href="https://www.omdbapi.com/apikey.aspx" target="_blank" rel="noopener">omdbapi.com/apikey.aspx</a> sayfasında FREE seçeneğiyle e-postana anahtar gelir, içindeki bağlantıyla etkinleştir. </p>'
     +'<div><label class="lab" for="k_o">OMDb API Key</label><input class="in" id="k_o" autocomplete="off" autocapitalize="off" spellcheck="false" value="'+esc(keys.omdb)+'"></div></div>'
     +'<div class="row"><button class="btn solid" data-act="savekeys">Kaydet ve dene</button></div><p class="msg" id="kmsg"></p></div>';
 }
@@ -591,7 +622,7 @@ async function doSearch(){
   var t=($('#sin').value||'').trim();searchText=t;
   if(!t){setMsg('Önce bir film adı yaz.');return;}
   busy=true;setMsg('Aranıyor…');
-  try{var r=await tmdb('/search/movie',{query:t,language:'tr-TR',include_adult:'false'});results=(r.results||[]).slice(0,8).map(candFrom);setMsg('');}
+  try{if(keys.tmdb){var r=await tmdb('/search/movie',{query:t,language:'tr-TR',include_adult:'false'});results=(r.results||[]).slice(0,8).map(candFrom);}else{results=await omdbSearchList(t);}setMsg('');}
   catch(e){setMsg(e.message);}
   busy=false;var el=$('#sres');if(el)el.innerHTML=candsHTML(results);
 }
@@ -639,7 +670,7 @@ async function doSuggest(){
 }
 async function addCand(c,status){
   if(busy)return;busy=true;setMsg('Film bilgileri alınıyor…');
-  try{var nf=await fullFilm(c.tmdbId);addFilm(toFilm(nf,status));setMsg('');toast(nf.title+' eklendi');}
+  try{var nf=c.tmdbId?await fullFilm(c.tmdbId):await omdbFull(c.imdbId);addFilm(toFilm(nf,status));setMsg('');toast(nf.title+' eklendi');}
   catch(e){setMsg(e.message);}
   busy=false;render();
 }
@@ -720,7 +751,7 @@ document.addEventListener('click',function(e){
     case 'noposter':patch(id,{poster:null});renderSheet();break;
     case 'rematch':
       if(busy)break;busy=true;toast('Eşleştiriliyor…');
-      (async function(){var f=films.get(id);patch(id,{tmdbId:null});try{await matchOne(id);toast('Eşleşti');}catch(er){patch(id,{tmdbId:f.tmdbId||null});toast(er.message);}busy=false;renderSheet();})();break;
+      (async function(){var f=films.get(id);patch(id,{tmdbId:null});try{var okk=await matchOne(id);toast(okk?'Eşleşti':'Bulunamadı');}catch(er){patch(id,{tmdbId:f.tmdbId||null});toast(er.message);}busy=false;renderSheet();})();break;
     case 'matchall':matchAll();break;
     case 'search':if(!busy)doSearch();break;
     case 'suggest':doSuggest();break;
@@ -740,8 +771,8 @@ document.addEventListener('click',function(e){
       (async function(){
         keys.tmdb=($('#k_t').value||'').trim();keys.omdb=($('#k_o').value||'').trim();saveKeys();
         var m=$('#kmsg'),out=[];
-        if(keys.tmdb){try{await tmdb('/configuration');out.push('TMDB çalışıyor.');genreList=null;}catch(er){out.push('TMDB: '+er.message);}}else out.push('TMDB anahtarı boş.');
-        if(keys.omdb){var r=await omdbRating('tt0111161');out.push(r!=null?'OMDb çalışıyor.':'OMDb anahtarı çalışmadı. E-postadaki etkinleştirme bağlantısına tıkladın mı?');}
+        if(keys.tmdb){try{await tmdb('/configuration');out.push('TMDB çalışıyor.');genreList=null;}catch(er){out.push('TMDB: '+er.message);}}else out.push('TMDB anahtarı boş (isteğe bağlı).');
+        if(keys.omdb){var r=await omdbRating('tt0111161');out.push(r!=null?'OMDb çalışıyor.':'OMDb anahtarı çalışmadı. E-postadaki etkinleştirme bağlantısına tıkladın mı?');}else out.push('OMDb anahtarı boş.');
         m.textContent=out.join(' ');
       })();break;
   }
@@ -762,7 +793,7 @@ document.addEventListener('change',function(e){
   }
   else if(t.id==='rest'&&t.files&&t.files[0]){t.files[0].text().then(restoreFrom);t.value='';}
 });
-document.addEventListener('keydown',function(e){if(e.key==='Enter'&&e.target.id==='sin'){e.preventDefault();if(!busy&&keys.tmdb)doSearch();}});
+document.addEventListener('keydown',function(e){if(e.key==='Enter'&&e.target.id==='sin'){e.preventDefault();if(!busy&&hasSrc())doSearch();}});
 
 /* sürükleyerek sıralama */
 document.addEventListener('pointerdown',function(e){
